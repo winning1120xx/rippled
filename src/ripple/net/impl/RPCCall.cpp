@@ -798,14 +798,14 @@ private:
         unsigned int index = 0;
         const unsigned int size = jvParams.size ();
 
-        Json::Value jvRequest;
-
         std::string param = jvParams[index++].asString ();
         if (param.empty ())
             return RPC::make_param_error ("Invalid first parameter");
 
+        Json::Value jvRequest;
         if (param[0] != 'r')
         {
+            // This is not a wallet address, because it doesn't start with 'r'.
             if (param.size() == 64)
                 jvRequest[jss::ledger_hash] = param;
             else

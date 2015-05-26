@@ -19,6 +19,7 @@
 
 #include <BeastConfig.h>
 #include <ripple/rpc/impl/AccountFromString.h>
+#include <ripple/rpc/impl/FieldReader.h>
 #include <ripple/rpc/impl/LookupLedger.h>
 #include <ripple/app/paths/RippleState.h>
 
@@ -32,195 +33,108 @@ namespace ripple {
 //    one wallet) or an array of strings (if more than one).
 
 // Response:
-// 1) Array, "obligations", indicating the total obligations of the
+// A Json object with three fields:
+//
+// 1) "obligations", an array indicating the total obligations of the
 //    gateway in each currency. Obligations to specified hot wallets
 //    are not counted here.
-// 2) Object, "balances", indicating balances in each account
+// 2) "balances", an object indicating balances in each account
 //    that holds gateway assets. (Those specified in the "hotwallet"
 //    field.)
-// 3) Object of "assets" indicating accounts that owe the gateway.
+// 3) "assets", an object indicating accounts that owe the gateway.
 //    (Gateways typically do not hold positive balances. This is unusual.)
 
 // gateway_balances [<ledger>] <account> [<howallet> [<hotwallet [...
 
 Json::Value doGatewayBalances (RPC::Context& context)
 {
-    auto& params = context.params;
-
-    // Get the current ledger
     Ledger::pointer ledger;
-    Json::Value result (RPC::lookupLedger (params, ledger, context.netOps));
+    std::set <Account> hotWallets;
+    RippleAddress naAccount;
 
-    if (!ledger)
-        return result;
+    RPC::FieldReader reader (context.params);
+    auto success =
+            reader.read (ledger, context.netOps) &&
+            reader.readOptional (hotWallets, jss::hotwallet) &&
+            reader.readAccountAddress (naAccount, ledger, context.netOps);
 
-    if (!(params.isMember (jss::account) || params.isMember (jss::ident)))
-        return RPC::missing_field_error (jss::account);
-
-    std::string const strIdent (params.isMember (jss::account)
-        ? params[jss::account].asString ()
-        : params[jss::ident].asString ());
-
-    int iIndex = 0;
-
-    if (params.isMember (jss::account_index))
-    {
-        auto const& accountIndex = params[jss::account_index];
-        if (!accountIndex.isUInt() && !accountIndex.isInt ())
-            return RPC::invalid_field_message (jss::account_index);
-        iIndex = accountIndex.asUInt ();
-    }
-
-    bool const bStrict = params.isMember (jss::strict) &&
-            params[jss::strict].asBool ();
-
-    // Get info on account.
-    bool bIndex; // out param
-    RippleAddress naAccount; // out param
-    Json::Value jvAccepted (RPC::accountFromString (
-        ledger, naAccount, bIndex, strIdent, iIndex, bStrict, context.netOps));
-
-    if (!jvAccepted.empty ())
-        return jvAccepted;
+    if (! success)
+        return reader.error();
 
     context.loadType = Resource::feeHighBurdenRPC;
+
+    Json::Value result;
+    std::map <Currency, STAmount> obligations;
+
+    using AccountBalances = std::map <Account, std::vector <STAmount>>;
+    AccountBalances hotBalances, assets;
 
     result[jss::account] = naAccount.humanAccountID();
     auto accountID = naAccount.getAccountID();
 
-    // Parse the specified hotwallet(s), if any
-    std::set <Account> hotWallets;
-
-    if (params.isMember ("hotwallet"))
-    {
-        Json::Value const& hw = params["hotwallet"];
-        bool valid = true;
-
-        auto addHotWallet = [&valid, &hotWallets](Json::Value const& j)
-        {
-            if (j.isString())
-            {
-                RippleAddress ra;
-                if (! ra.setAccountPublic (j.asString ()) &&
-                    ! ra.setAccountID (j.asString()))
-                {
-                    valid = false;
-                }
-                else
-                    hotWallets.insert (ra.getAccountID ());
-            }
-            else
-            {
-                valid = false;
-            }
-        };
-
-        if (hw.isArray())
-        {
-            for (unsigned i = 0; i < hw.size(); ++i)
-                addHotWallet (hw[i]);
-        }
-        else if (hw.isString())
-        {
-            addHotWallet (hw);
-        }
-        else
-        {
-            valid = false;
-        }
-
-        if (! valid)
-        {
-            result[jss::error]   = "invalidHotWallet";
-            return result;
-        }
-
-    }
-
-    std::map <Currency, STAmount> sums;
-    std::map <Account, std::vector <STAmount>> hotBalances;
-    std::map <Account, std::vector <STAmount>> assets;
-
     // Traverse the cold wallet's trust lines
-    ledger->visitAccountItems (accountID, [&](SLE::ref sle)
+    ledger->visitAccountItems (accountID, [&] (SLE::ref sle)
     {
-        if (sle->getType() == ltRIPPLE_STATE)
+        if (sle->getType() != ltRIPPLE_STATE)
+            return;
+
+        RippleState rs (sle, accountID);
+        auto balance = rs.getBalance ();
+        if (! balance)
+            return;
+
+        // Get the counterparty for the trustline.
+        auto const& peer = rs.getAccountIDPeer();
+
+        // A negative balance means the cold wallet owes (normal).
+        // A positive balance means the cold wallet has an asset (unusual).
+
+        if (hotWallets.count (peer) > 0)  // This is a specified hot wallet.
+            hotBalances[peer].push_back (- balance);
+
+        else if (balance > zero)          // This is a gateway asset.
+            assets[peer].push_back (balance);
+
+        else   // Normal negative balance: an obligation to a customer.
         {
-            RippleState rs (sle, accountID);
-
-            int balSign = rs.getBalance().signum();
-            if (balSign == 0)
-                return;
-
-            auto const& peer = rs.getAccountIDPeer();
-
-            // Here, a negative balance means the cold wallet owes (normal)
-            // A positive balance means the cold wallet has an asset (unusual)
-
-            if (hotWallets.count (peer) > 0)
-            {
-                // This is a specified hot wallt
-                hotBalances[peer].push_back (-rs.getBalance ());
-            }
-            else if (balSign > 0)
-            {
-                // This is a gateway asset
-                assets[peer].push_back (rs.getBalance ());
-            }
+            auto& o = obligations[balance.getCurrency()];
+            if (o == zero)
+                o = - balance;  // o might not have a currency code yet.
             else
-            {
-                // normal negative balance, obligation to customer
-                auto& bal = sums[rs.getBalance().getCurrency()];
-                if (bal == zero)
-                {
-                    // This is needed to set the currency code correctly
-                    bal = -rs.getBalance();
-                }
-                else
-                    bal -= rs.getBalance();
-            }
+                o -= balance;
+            // TODO(tom): should this be the default behavior for
+            // STAmount::operator+= and STAmount::operator-=?
         }
     });
 
-    if (! sums.empty())
+    if (! obligations.empty())
     {
-        Json::Value& j = (result [jss::obligations] = Json::objectValue);
-        for (auto const& e : sums)
-        {
-            j[to_string (e.first)] = e.second.getText ();
-        }
+        Json::Value& j = result [jss::obligations];
+        for (auto const& o : obligations)
+            j[to_string (o.first)] = o.second.getText ();
     }
 
-    if (! hotBalances.empty())
+    auto balancesToJson = [&] (
+        AccountBalances const& balances, Json::StaticString field)
     {
-        Json::Value& j = (result [jss::balances] = Json::objectValue);
-        for (auto const& account : hotBalances)
+        if (balances.empty())
+            return;
+
+        auto& jsonBalances = result[field];
+        for (auto const& account : balances)
         {
-            Json::Value& balanceArray = (j[to_string (account.first)] = Json::arrayValue);
+            auto& balanceArray = jsonBalances[to_string (account.first)];
             for (auto const& balance : account.second)
             {
                 Json::Value& entry = balanceArray.append (Json::objectValue);
-                entry[jss::currency] = balance.getHumanCurrency ();
+                entry[jss::currency] = to_string (balance.issue().currency);
                 entry[jss::value] = balance.getText();
             }
         }
-    }
+    };
 
-    if (! assets.empty())
-    {
-        Json::Value& j = (result [jss::assets] = Json::objectValue);
-
-        for (auto const& account : assets)
-        {
-            Json::Value& balanceArray = (j[to_string (account.first)] = Json::arrayValue);
-            for (auto const& balance : account.second)
-            {
-                Json::Value& entry = balanceArray.append (Json::objectValue);
-                entry[jss::currency] = balance.getHumanCurrency ();
-                entry[jss::value] = balance.getText();
-            }
-        }
-    }
+    balancesToJson (hotBalances, jss::balances);
+    balancesToJson (assets, jss::assets);
 
     return result;
 }
