@@ -495,6 +495,25 @@ inline LedgerStateParms operator& (
         static_cast<int> (l1) & static_cast<int> (l2));
 }
 
+/** Find a ledger index from which we could easily get the requested ledger
+
+    The index that we return should meet two requirements:
+        1) It must be the index of a ledger that has the hash of the ledger
+            we are looking for. This means that its sequence must be equal to
+            greater than the sequence that we want but not more than 256 greater
+            since each ledger contains the hashes of the 256 previous ledgers.
+
+        2) Its hash must be easy for us to find. This means it must be 0 mod 256
+            because every such ledger is permanently enshrined in a LedgerHashes
+            page which we can easily retrieve.
+*/
+inline
+LedgerIndex
+getCandidateLedger (LedgerIndex requested)
+{
+    return (requested + 255) & (~255);
+}
+
 } // ripple
 
 #endif

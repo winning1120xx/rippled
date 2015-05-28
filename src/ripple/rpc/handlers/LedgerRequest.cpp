@@ -69,7 +69,7 @@ Json::Value doLedgerRequest (RPC::Context& context)
         if (ledgerHash == zero)
         {
             // Find a ledger more likely to have the hash of the desired ledger
-            auto refIndex = (ledgerIndex + 255) & (~255);
+            auto refIndex = getCandidateLedger (ledgerIndex);
             auto refHash = ledger->getLedgerHash (refIndex);
             assert (refHash.isNonZero ());
 

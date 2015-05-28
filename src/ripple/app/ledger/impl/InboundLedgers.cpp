@@ -54,10 +54,16 @@ public:
     {
     }
 
-    Ledger::pointer acquire (uint256 const& hash, std::uint32_t seq, InboundLedger::fcReason reason)
+    /** Acquire the requested ledger if not already available.
+        The acquire process, once complete, will ensure that all entries in the
+        requested ledger are available.
+    */
+    Ledger::pointer acquire (uint256 const& hash, std::uint32_t seq,
+        InboundLedger::fcReason reason)
     {
         assert (hash.isNonZero ());
-        Ledger::pointer ret;
+
+        InboundLedger::pointer inbound;
 
         {
             ScopedLockType sl (mLock);
@@ -67,26 +73,30 @@ public:
                 auto it = mLedgers.find (hash);
                 if (it != mLedgers.end ())
                 {
-                    // Don't touch failed acquires so they can expire
-                    if (! it->second->isFailed ())
-                    {
-                        it->second->update (seq);
-                        if (it->second->isComplete ())
-                            ret = it->second->getLedger ();
-                    }
+                    inbound = it->second;
 
+                    if (! inbound->isFailed ())
+                    {
+                        // If the acquisition failed, don't mark the item as
+                        // recently accessed, to allow it to expire.
+                        inbound->update (seq);
+                    }
                 }
                 else
                 {
-                    auto il = std::make_shared <InboundLedger> (hash, seq, reason, std::ref (m_clock));
-                    mLedgers.insert (std::make_pair (hash, il));
-                    il->init (sl);
+                    inbound = std::make_shared <InboundLedger> (hash, seq,
+                        reason, std::ref (m_clock));
+                    mLedgers.emplace (hash, inbound);
                     ++mCounter;
+                    inbound->init (sl);
                 }
             }
         }
 
-        return ret;
+        if (inbound && inbound->isComplete ())
+            return inbound->getLedger ();
+
+        return {};
     }
 
     InboundLedger::pointer find (uint256 const& hash)
