@@ -1440,13 +1440,31 @@ public:
             if (nonzero)
             {
                 // We found the hash and sequence of a better reference ledger
-                Ledger::pointer ledger =
-                    getApp().getInboundLedgers().acquire (
-                        refHash, refIndex, InboundLedger::fcGENERIC);
+                Ledger::pointer ledger = mLedgerHistory.getLedgerByHash (refHash);
+
                 if (ledger)
                 {
-                    ledgerHash = ledger->getLedgerHash (index);
-                    assert (ledgerHash.isNonZero());
+                    try
+                    {
+                        ledgerHash = ledger->getLedgerHash (index);
+                    }
+                    catch (SHAMapMissingNode&)
+                    {
+                        ledger.reset();
+                    }
+                }
+
+                if (!ledger)
+                {
+                    // We don't seem to have the complete ledger, try to acquire
+                    ledger =
+                        getApp().getInboundLedgers().acquire (
+                            refHash, refIndex, InboundLedger::fcGENERIC);
+                    if (ledger)
+                    {
+                        ledgerHash = ledger->getLedgerHash (index);
+                        assert (ledgerHash.isNonZero());
+                    }
                 }
             }
         }
