@@ -78,10 +78,10 @@ public:
                 }
                 else
                 {
-                    auto il = std::make_shared <InboundLedger> (hash, seq, reason, std::ref (m_clock));
+                    il = std::make_shared <InboundLedger> (hash, seq, reason,
+                        std::ref (m_clock));
                     mLedgers.insert (std::make_pair (hash, il));
                     ++mCounter;
-
                     il->init (sl);
                 }
             }
