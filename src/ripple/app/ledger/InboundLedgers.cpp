@@ -54,11 +54,12 @@ public:
     {
     }
 
-    Ledger::pointer acquire (uint256 const& hash, std::uint32_t seq, InboundLedger::fcReason reason)
+    Ledger::pointer acquire (uint256 const& hash, std::uint32_t seq,
+        InboundLedger::fcReason reason)
     {
         assert (hash.isNonZero ());
 
-        InboundLedger::pointer il;
+        InboundLedger::pointer inbound;
 
         {
             ScopedLockType sl (mLock);
@@ -68,27 +69,27 @@ public:
                 auto it = mLedgers.find (hash);
                 if (it != mLedgers.end ())
                 {
-                    il = it->second;
+                    inbound = it->second;
 
-                    if (! il->isFailed ())
+                    if (! inbound->isFailed ())
                     {
                         // Don't touch failed acquires so they can expire
-                        il->update (seq);
+                        inbound->update (seq);
                     }
                 }
                 else
                 {
-                    il = std::make_shared <InboundLedger> (hash, seq, reason,
-                        std::ref (m_clock));
-                    mLedgers.insert (std::make_pair (hash, il));
+                    inbound = std::make_shared <InboundLedger> (hash, seq,
+                        reason, std::ref (m_clock));
+                    mLedgers.insert (std::make_pair (hash, inbound));
                     ++mCounter;
-                    il->init (sl);
+                    inbound->init (sl);
                 }
             }
         }
 
-        if (il && il->isComplete ())
-            return il->getLedger ();
+        if (inbound && inbound->isComplete ())
+            return inbound->getLedger ();
 
         return {};
     }
