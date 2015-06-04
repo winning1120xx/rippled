@@ -1466,7 +1466,9 @@ public:
 
             if (!ledger)
             {
-                // We don't seem to have the complete ledger; acquire it.
+                // We don't seem to have the complete ledger; acquire it. The
+                // acquire process will only return complete ledgers, so we
+                // don't need to catch missing node exceptions.
                 ledger = getApp().getInboundLedgers().acquire (
                     refHash, refIndex, InboundLedger::fcGENERIC);
                 if (ledger)
