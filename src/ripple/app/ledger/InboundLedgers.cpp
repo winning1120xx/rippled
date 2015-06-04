@@ -54,6 +54,10 @@ public:
     {
     }
 
+    /** Acquire the requested ledger if not already available.
+        The acquire process, once complete, will ensure that all entries in the
+        requested ledger are available.
+    */
     Ledger::pointer acquire (uint256 const& hash, std::uint32_t seq,
         InboundLedger::fcReason reason)
     {
