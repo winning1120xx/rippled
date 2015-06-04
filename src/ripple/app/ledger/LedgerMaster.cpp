@@ -1426,48 +1426,57 @@ public:
         if (!referenceLedger || (referenceLedger->getLedgerSeq() < index))
             return ledgerHash; // Nothing we can do. No validated ledger.
 
-        // See if the hash for the ledger we need is in the reference ledger
+        // Is the hash for the ledger we need in the reference ledger?
         ledgerHash = referenceLedger->getLedgerHash (index);
-        if (ledgerHash.isZero())
+
+        // Yes
+        if (ledgerHash.isNonZero())
+            return ledgerHash;
+
+        // No. We need to get another ledger that might have it. That ledger
+        // must meet two requirements:
+        //  1) It must have the hash of the ledger we are looking for.
+        //      This means that its sequence must be equal to greater than the
+        //      sequence that we want but not more than 256 greater.
+        //  2) Its hash must be easy for us to find.
+        //      This means it must be 0 mod 256, because every such ledger is
+        //      permanently enshrined in a LedgerHashes page.
+
+        LedgerIndex const refIndex = (index + 255) & (~255);
+        LedgerHash const refHash = referenceLedger->getLedgerHash (refIndex);
+
+        bool const nonzero (refHash.isNonZero ());
+        assert (nonzero);
+        if (nonzero)
         {
-            // No, Try to get another ledger that might have the hash we need
-            // Compute the index and hash of a ledger that will have the hash we need
-            LedgerIndex refIndex = (index + 255) & (~255);
-            LedgerHash refHash = referenceLedger->getLedgerHash (refIndex);
+            // We found the hash and sequence of a better reference ledger
+            Ledger::pointer ledger = mLedgerHistory.getLedgerByHash (refHash);
 
-            bool const nonzero (refHash.isNonZero ());
-            assert (nonzero);
-            if (nonzero)
+            if (ledger)
             {
-                // We found the hash and sequence of a better reference ledger
-                Ledger::pointer ledger = mLedgerHistory.getLedgerByHash (refHash);
+                try
+                {
+                    ledgerHash = ledger->getLedgerHash (index);
+                }
+                catch (SHAMapMissingNode&)
+                {
+                    ledger.reset();
+                }
+            }
 
+            if (!ledger)
+            {
+                // We don't seem to have the complete ledger; acquire it.
+                ledger = getApp().getInboundLedgers().acquire (
+                    refHash, refIndex, InboundLedger::fcGENERIC);
                 if (ledger)
                 {
-                    try
-                    {
-                        ledgerHash = ledger->getLedgerHash (index);
-                    }
-                    catch (SHAMapMissingNode&)
-                    {
-                        ledger.reset();
-                    }
-                }
-
-                if (!ledger)
-                {
-                    // We don't seem to have the complete ledger, try to acquire
-                    ledger =
-                        getApp().getInboundLedgers().acquire (
-                            refHash, refIndex, InboundLedger::fcGENERIC);
-                    if (ledger)
-                    {
-                        ledgerHash = ledger->getLedgerHash (index);
-                        assert (ledgerHash.isNonZero());
-                    }
+                    ledgerHash = ledger->getLedgerHash (index);
+                    assert (ledgerHash.isNonZero());
                 }
             }
         }
+
         return ledgerHash;
     }
 
