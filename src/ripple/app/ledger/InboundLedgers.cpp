@@ -77,7 +77,8 @@ public:
 
                     if (! inbound->isFailed ())
                     {
-                        // Don't touch failed acquires so they can expire
+                        // If the acquisition failed, don't mark the item as
+                        // recently accessed, to allow it to expire.
                         inbound->update (seq);
                     }
                 }
@@ -85,7 +86,7 @@ public:
                 {
                     inbound = std::make_shared <InboundLedger> (hash, seq,
                         reason, std::ref (m_clock));
-                    mLedgers.insert (std::make_pair (hash, inbound));
+                    mLedgers.emplace (hash, inbound);
                     ++mCounter;
                     inbound->init (sl);
                 }
