@@ -147,7 +147,7 @@ PeerImp::run()
         doProtocolStart();
     }
 
-    setTimer();
+    setTimer(true);
 }
 
 void
@@ -189,10 +189,22 @@ PeerImp::send (Message::pointer const& m)
         return;
     if(detaching_)
         return;
+
+    auto sendq_size = send_queue_.size();
+
+    if (sendq_size < Tuning::targetSendQueue)
+    {
+        // To detect a peer that does not read from their
+        // side of the connection, we expect a peer to have
+        // a small send queue at least once per timer interval
+        low_sendq_ = true;
+    }
+
     send_queue_.push(m);
-    if(send_queue_.size() > 1)
+
+    if(sendq_size != 0)
         return;
-    recent_empty_ = true;
+
     boost::asio::async_write (stream_, boost::asio::buffer(
         send_queue_.front()->getBuffer()), strand_.wrap(std::bind(
             &PeerImp::onWriteMessage, shared_from_this(),
@@ -442,17 +454,17 @@ PeerImp::gracefulClose()
 #endif
     if (send_queue_.size() > 0)
         return;
-    setTimer();
+    setTimer(false);
     stream_.async_shutdown(strand_.wrap(std::bind(&PeerImp::onShutdown,
         shared_from_this(), beast::asio::placeholders::error)));
 }
 
 void
-PeerImp::setTimer()
+PeerImp::setTimer(bool firstTime)
 {
     error_code ec;
     timer_.expires_from_now( std::chrono::seconds(
-        (lastPingSeq_ == 0) ? 3 : 15), ec);
+        (firstTime) ? 3 : 15), ec);
 
     if (ec)
     {
@@ -499,17 +511,17 @@ PeerImp::onTimer (error_code const& ec)
         return close();
     }
 
-    if (! recent_empty_)
+    if (! low_sendq_)
     {
-        fail ("Timeout");
+        fail ("Large send queue");
         return;
     }
 
-    recent_empty_ = false;
+    low_sendq_ = false;
 
     // Make sequence unpredictable enough that a peer
     // can't fake their latency
-    lastPingSeq_ += (rand() % 8192);
+    lastPingSeq_ = (rand() % 65536);
     lastPingTime_ = clock_type::now();
 
     protocol::TMPing message;
@@ -519,7 +531,7 @@ PeerImp::onTimer (error_code const& ec)
     send (std::make_shared<Message> (
         message, protocol::mtPING));
 
-    setTimer();
+    setTimer(false);
 }
 
 void
@@ -1454,6 +1466,13 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMGetObjectByHash> const& m)
     if (packet.query ())
     {
         // this is a query
+        if (send_queue_.size() >= Tuning::dropSendQueue)
+        {
+            if (p_journal_.debug) p_journal_.debug <<
+                "GetObject: Large send queue";
+        }
+
+
         if (packet.type () == protocol::TMGetObjectByHash::otFETCH_PACK)
         {
             doFetchPack (m);
@@ -1897,6 +1916,12 @@ PeerImp::getLedger (std::shared_ptr<protocol::TMGetLedger> const& m)
     }
     else
     {
+        if (send_queue_.size() >= Tuning::dropSendQueue)
+        {
+            if (p_journal_.debug) p_journal_.debug <<
+                "GetLedger: Large send queue";
+        }
+
         if (getApp().getFeeTrack().isLoadedLocal() && ! cluster())
         {
             if (p_journal_.debug) p_journal_.debug <<
