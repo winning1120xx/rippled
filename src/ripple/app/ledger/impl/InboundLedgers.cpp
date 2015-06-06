@@ -313,6 +313,10 @@ public:
             else
                 ret[to_string (it.first)] = it.second->getJson(0);
         }
+        for (auto const& failure : mRecentFailures.get ())
+        {
+            ret[to_string (failure)]["failed"] = true;
+        }
 
     return ret;
     }

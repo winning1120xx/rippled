@@ -238,6 +238,25 @@ public:
         return false;
     }
 
+    /** Get all the keys
+        @return All the keys in the cache
+    */
+    std::vector <key_type> get ()
+    {
+        std::vector <key_type> ret;
+
+        {
+            lock_guard lock (m_mutex);
+
+            ret.reserve (m_map.size ());
+
+            for (auto const& it : m_map)
+                ret.emplace_back (it.first);
+        }
+
+        return ret;
+    }
+
     /** Remove stale entries from the cache. */
     void sweep ()
     {
